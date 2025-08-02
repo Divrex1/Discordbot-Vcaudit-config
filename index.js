@@ -154,18 +154,31 @@ client.on(Events.InteractionCreate, async interaction => {
         const vcTimes = (activityLog[user.id] || []).filter(t => t > oneDayAgo);
         const logs = (presenceLog[user.id] || []).filter(entry => entry.time > oneDayAgo);
 
-        let presenceHistory = logs.map(entry => {
-            const formatted = `<t:${Math.floor(entry.time / 1000)}:f>`;
-            return `- **${entry.status.toUpperCase()}** at ${formatted}`;
-        }).join('\n');
+        const MAX_LENGTH = 1900;
+        const username = user.username;
 
-        if (presenceHistory === '') presenceHistory = '❌ No status changes in last 24h';
+        let vcMessage = `🗣️ **VC Join Times:** ${vcTimes.length > 0 ? vcTimes.map(t => `<t:${Math.floor(t / 1000)}:t>`).join(', ') : '❌ None'}`;
+        let presenceHeader = `🟢 **Presence Changes:**\n`;
+        let presenceChunks = [];
 
-        await interaction.reply(
-            `📊 **${user.username}'s Activity (Last 24h):**\n\n` +
-            `🗣️ **VC Join Times:** ${vcTimes.length > 0 ? vcTimes.map(t => `<t:${Math.floor(t / 1000)}:t>`).join(', ') : '❌ None'}\n\n` +
-            `🟢 **Presence Changes:**\n${presenceHistory}`
-        );
+        let currentChunk = '';
+        for (let line of logs.map(entry => `- **${entry.status.toUpperCase()}** at <t:${Math.floor(entry.time / 1000)}:f>`)) {
+            if ((currentChunk + line + '\n').length > MAX_LENGTH) {
+                presenceChunks.push(currentChunk);
+                currentChunk = '';
+            }
+            currentChunk += line + '\n';
+        }
+        if (currentChunk) presenceChunks.push(currentChunk);
+        if (presenceChunks.length === 0) presenceChunks.push('❌ No status changes in last 24h');
+
+        await interaction.reply({
+            content: `📊 **${username}'s Activity (Last 24h):**\n\n${vcMessage}\n\n${presenceHeader}${presenceChunks[0]}`
+        });
+
+        for (let i = 1; i < presenceChunks.length; i++) {
+            await interaction.followUp({ content: presenceChunks[i] });
+        }
     }
 });
 
