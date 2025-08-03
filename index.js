@@ -1,3 +1,4 @@
+// index.js
 require('dotenv').config(); // Load .env variables
 
 const {
@@ -57,6 +58,7 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildPresences,
+        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.MessageContent,
     ],
 });
@@ -150,6 +152,9 @@ client.on(Events.InteractionCreate, async interaction => {
         const user = interaction.options.getUser('user');
         const now = Date.now();
         const oneDayAgo = now - 24 * 60 * 60 * 1000;
+
+        // 👇 Replace cache.get with fetch
+        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
         const vcTimes = (activityLog[user.id] || []).filter(t => t > oneDayAgo);
         const logs = (presenceLog[user.id] || []).filter(entry => entry.time > oneDayAgo);
