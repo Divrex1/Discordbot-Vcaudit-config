@@ -1,4 +1,3 @@
-// index.js
 require('dotenv').config(); // Load .env variables
 
 const {
@@ -153,11 +152,15 @@ client.on(Events.InteractionCreate, async interaction => {
         const now = Date.now();
         const oneDayAgo = now - 24 * 60 * 60 * 1000;
 
-        // 👇 Replace cache.get with fetch
         const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
         const vcTimes = (activityLog[user.id] || []).filter(t => t > oneDayAgo);
-        const logs = (presenceLog[user.id] || []).filter(entry => entry.time > oneDayAgo);
+
+        const logs = (presenceLog[user.id] || []).filter((entry, i, arr) => {
+            if (entry.time <= oneDayAgo) return false;
+            const prev = arr[i - 1];
+            return !prev || prev.status !== entry.status;
+        });
 
         const MAX_LENGTH = 1900;
         const username = user.username;
@@ -218,13 +221,17 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
     if (!['online', 'idle', 'dnd', 'offline'].includes(status)) return;
 
     if (!presenceLog[userId]) presenceLog[userId] = [];
-    presenceLog[userId].push({ status, time: Date.now() });
 
-    if (presenceLog[userId].length > 100) {
-        presenceLog[userId] = presenceLog[userId].slice(-100);
+    const last = presenceLog[userId][presenceLog[userId].length - 1];
+    if (!last || last.status !== status) {
+        presenceLog[userId].push({ status, time: Date.now() });
+
+        if (presenceLog[userId].length > 100) {
+            presenceLog[userId] = presenceLog[userId].slice(-100);
+        }
+
+        savePresenceLog();
     }
-
-    savePresenceLog();
 });
 
 function shuffleArray(array) {
