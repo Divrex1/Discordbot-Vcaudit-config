@@ -20,6 +20,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 let vcChannels = {};
 let activityLog = {};
 let presenceLog = {};
+let autoDeleteChannels = {};
 
 // Load and validate JSON files
 try { vcChannels = require('./vcChannels.json'); } catch {}
@@ -40,7 +41,9 @@ try {
     presenceLog = {};
     fs.writeFileSync('./presenceLog.json', JSON.stringify(presenceLog, null, 2));
 }
+try { autoDeleteChannels = require('./autoDeleteChannels.json'); } catch {}
 
+// Save helpers
 function saveVCChannels() {
     fs.writeFileSync('./vcChannels.json', JSON.stringify(vcChannels, null, 2));
 }
@@ -49,6 +52,9 @@ function saveActivityLog() {
 }
 function savePresenceLog() {
     fs.writeFileSync('./presenceLog.json', JSON.stringify(presenceLog, null, 2));
+}
+function saveAutoDeleteChannels() {
+    fs.writeFileSync('./autoDeleteChannels.json', JSON.stringify(autoDeleteChannels, null, 2));
 }
 
 const client = new Client({
@@ -76,6 +82,15 @@ const commands = [
             option.setName('user')
                 .setDescription('The user to check')
                 .setRequired(true)),
+    new SlashCommandBuilder()
+        .setName('setautodeletechannel')
+        .setDescription('Set this channel for daily auto-delete at 12 AM'),
+    new SlashCommandBuilder()
+        .setName('clearchats')
+        .setDescription('Manually clear chats in the configured auto-delete channel'),
+    new SlashCommandBuilder()
+        .setName('disableautodelete')
+        .setDescription('Disable auto-delete for this server'),
 ];
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
@@ -93,12 +108,14 @@ async function registerCommands() {
 client.once(Events.ClientReady, () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
     registerCommands();
+    scheduleDailyClear();
 });
 
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
 
+    // ---- VC Log Setup ----
     if (commandName === 'setvcchannel') {
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
             return interaction.reply({ content: '❌ Admin permission required.', ephemeral: true });
@@ -108,6 +125,7 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.reply('✅ VC log channel set!');
     }
 
+    // ---- Team Generator ----
     if (commandName === 'teamgen') {
         const participants = [];
         const joinButton = new ButtonBuilder().setCustomId('join_team').setLabel('Join').setStyle(ButtonStyle.Primary);
@@ -147,12 +165,11 @@ client.on(Events.InteractionCreate, async interaction => {
         });
     }
 
+    // ---- Activity Tracker ----
     if (commandName === 'trackactivity') {
         const user = interaction.options.getUser('user');
         const now = Date.now();
         const oneDayAgo = now - 24 * 60 * 60 * 1000;
-
-        const member = await interaction.guild.members.fetch(user.id).catch(() => null);
 
         const vcTimes = (activityLog[user.id] || []).filter(t => t > oneDayAgo);
 
@@ -188,8 +205,39 @@ client.on(Events.InteractionCreate, async interaction => {
             await interaction.followUp({ content: presenceChunks[i] });
         }
     }
+
+    // ---- Auto Delete Setup ----
+    if (commandName === 'setautodeletechannel') {
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return interaction.reply({ content: '❌ Admin permission required.', ephemeral: true });
+        }
+        autoDeleteChannels[interaction.guild.id] = interaction.channel.id;
+        saveAutoDeleteChannels();
+        return interaction.reply('✅ This channel is now set for daily auto-delete at 12 AM!');
+    }
+
+    if (commandName === 'clearchats') {
+        const channelId = autoDeleteChannels[interaction.guild.id];
+        if (!channelId) return interaction.reply('❌ No auto-delete channel set for this server.');
+
+        const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
+        if (!channel || !channel.isTextBased()) return interaction.reply('❌ Configured channel is invalid.');
+
+        await clearChannel(channel);
+        return interaction.reply(`🧹 Cleared messages in ${channel.name}`);
+    }
+
+    if (commandName === 'disableautodelete') {
+        if (!autoDeleteChannels[interaction.guild.id]) {
+            return interaction.reply('❌ Auto-delete was not enabled for this server.');
+        }
+        delete autoDeleteChannels[interaction.guild.id];
+        saveAutoDeleteChannels();
+        return interaction.reply('✅ Auto-delete disabled for this server.');
+    }
 });
 
+// ---- Voice State Logs ----
 client.on('voiceStateUpdate', (oldState, newState) => {
     const member = newState.member;
     const wasIn = !!oldState.channel;
@@ -213,6 +261,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
     }
 });
 
+// ---- Presence Logs ----
 client.on('presenceUpdate', (oldPresence, newPresence) => {
     if (!newPresence || !newPresence.userId) return;
     const userId = newPresence.userId;
@@ -234,11 +283,40 @@ client.on('presenceUpdate', (oldPresence, newPresence) => {
     }
 });
 
+// ---- Helpers ----
 function shuffleArray(array) {
     for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [array[i], array[j]] = [array[j], array[i]];
     }
+}
+
+async function clearChannel(channel) {
+    let messages;
+    do {
+        messages = await channel.messages.fetch({ limit: 100 });
+        await channel.bulkDelete(messages, true);
+    } while (messages.size >= 2);
+}
+
+function scheduleDailyClear() {
+    const now = new Date();
+    const millisTillMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0) - now;
+
+    setTimeout(async () => {
+        for (const [guildId, channelId] of Object.entries(autoDeleteChannels)) {
+            try {
+                const guild = await client.guilds.fetch(guildId);
+                const channel = await guild.channels.fetch(channelId);
+                if (!channel || !channel.isTextBased()) continue;
+                await clearChannel(channel);
+                console.log(`🧹 Cleared messages in ${channel.name} (${guild.name})`);
+            } catch (err) {
+                console.error(`Failed clearing messages for guild ${guildId}:`, err);
+            }
+        }
+        scheduleDailyClear(); // reschedule
+    }, millisTillMidnight);
 }
 
 client.login(TOKEN);
