@@ -223,8 +223,13 @@ client.on(Events.InteractionCreate, async interaction => {
         const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return interaction.reply('❌ Configured channel is invalid.');
 
+        // ✅ Fix: Defer reply first
+        await interaction.deferReply({ ephemeral: true });
+
         await clearChannel(channel);
-        return interaction.reply(`🧹 Cleared messages in ${channel.name}`);
+
+        // ✅ Then edit the reply
+        return interaction.editReply(`🧹 Cleared messages in ${channel.name}`);
     }
 
     if (commandName === 'disableautodelete') {
