@@ -16,6 +16,10 @@ const fs = require('fs');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const ALLOWED_ROLES = (process.env.ALLOWED_ROLES || "")
+    .split(",")
+    .map(r => r.trim())
+    .filter(r => r.length > 0);
 
 let vcChannels = {};
 let activityLog = {};
@@ -111,9 +115,21 @@ client.once(Events.ClientReady, () => {
     scheduleDailyClear();
 });
 
+// ---- Role-based Access Check ----
+function hasPermission(interaction) {
+    if (ALLOWED_ROLES.length === 0) return true; // if no roles configured, allow everyone
+    const memberRoles = interaction.member.roles.cache.map(r => r.id);
+    return ALLOWED_ROLES.some(r => memberRoles.includes(r));
+}
+
 client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isChatInputCommand()) return;
     const { commandName } = interaction;
+
+    // Check role permission
+    if (!hasPermission(interaction)) {
+        return interaction.reply({ content: '❌ You don’t have permission to use this bot.', ephemeral: true });
+    }
 
     // ---- VC Log Setup ----
     if (commandName === 'setvcchannel') {
