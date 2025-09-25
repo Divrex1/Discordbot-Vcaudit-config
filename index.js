@@ -223,13 +223,18 @@ client.on(Events.InteractionCreate, async interaction => {
         const channel = await interaction.guild.channels.fetch(channelId).catch(() => null);
         if (!channel || !channel.isTextBased()) return interaction.reply('❌ Configured channel is invalid.');
 
-        // ✅ Fix: Defer reply first
-        await interaction.deferReply({ ephemeral: true });
-
-        await clearChannel(channel);
-
-        // ✅ Then edit the reply
-        return interaction.editReply(`🧹 Cleared messages in ${channel.name}`);
+        try {
+            await interaction.deferReply({ ephemeral: true });
+            await clearChannel(channel);
+            await interaction.editReply(`🧹 Cleared messages in ${channel.name}`);
+        } catch (err) {
+            console.error(err);
+            if (interaction.deferred) {
+                await interaction.editReply('❌ Failed to clear messages. Check bot permissions.');
+            } else {
+                await interaction.reply({ content: '❌ Failed to clear messages.', ephemeral: true });
+            }
+        }
     }
 
     if (commandName === 'disableautodelete') {
@@ -297,11 +302,15 @@ function shuffleArray(array) {
 }
 
 async function clearChannel(channel) {
-    let messages;
+    let fetched;
+    let cycles = 0;
     do {
-        messages = await channel.messages.fetch({ limit: 100 });
-        await channel.bulkDelete(messages, true);
-    } while (messages.size >= 2);
+        fetched = await channel.messages.fetch({ limit: 100 });
+        if (fetched.size === 0) break;
+        await channel.bulkDelete(fetched, true).catch(() => {});
+        cycles++;
+        if (cycles > 50) break; // safety stop
+    } while (fetched.size >= 2);
 }
 
 function scheduleDailyClear() {
@@ -320,7 +329,7 @@ function scheduleDailyClear() {
                 console.error(`Failed clearing messages for guild ${guildId}:`, err);
             }
         }
-        scheduleDailyClear(); // reschedule
+        scheduleDailyClear(); // reschedule next midnight
     }, millisTillMidnight);
 }
 
